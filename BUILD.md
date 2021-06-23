@@ -42,8 +42,6 @@ Create a .rpm:
 
 ## macOS
 
-Install [Docker Desktop](https://www.docker.com/products/docker-desktop).
-
 Install python@3.9 from Homebrew:
 
 ```
@@ -54,6 +52,12 @@ If you don't have it already, install poetry (`pip3 install --user poetry`). The
 
 ```sh
 poetry install
+```
+
+[Install go](https://golang.org/) and then compile podman:
+
+```
+./scripts/build-podman-mac.sh
 ```
 
 Run from source tree:
