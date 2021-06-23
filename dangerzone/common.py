@@ -1,6 +1,5 @@
 import os
 import stat
-import platform
 import tempfile
 import appdirs
 

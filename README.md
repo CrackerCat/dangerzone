@@ -43,3 +43,7 @@ Dangerzone was inspired by [Qubes trusted PDF](https://blog.invisiblethings.org/
 Set up a development environment by following [these instructions](/BUILD.md).
 
 The git repository for the container is called [dangerzone-converter](https://github.com/firstlookmedia/dangerzone-converter).
+
+## Licenses
+
+- Dangerzone for Mac includes podman: [Apache-2.0 License](https://github.com/containers/podman/blob/master/LICENSE)

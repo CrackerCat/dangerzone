@@ -1,10 +1,7 @@
 import os
 import stat
 import requests
-import tempfile
 import subprocess
-import shutil
-import time
 import platform
 from PySide2 import QtCore, QtGui, QtWidgets
 
@@ -60,7 +57,7 @@ class DockerInstaller(QtWidgets.QDialog):
     def __init__(self, gui_common):
         super(DockerInstaller, self).__init__()
 
-        self.setWindowTitle("dangerzone")
+        self.setWindowTitle("Dangerzone")
         self.setWindowIcon(gui_common.get_window_icon())
         # self.setMinimumHeight(170)
 

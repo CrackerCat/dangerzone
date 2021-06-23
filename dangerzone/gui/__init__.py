@@ -4,6 +4,7 @@ import signal
 import platform
 import click
 import uuid
+import time
 from PySide2 import QtCore, QtWidgets
 
 from .common import GuiCommon
@@ -14,6 +15,7 @@ from .docker_installer import (
     DockerInstaller,
     AuthorizationFailed,
 )
+from .multipass import is_multipass_installed, MultipassInstaller
 from ..global_common import GlobalCommon
 
 
@@ -91,8 +93,16 @@ def gui_main(custom_container, filename):
     # Allow Ctrl-C to smoothly quit the program instead of throwing an exception
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
+    # See if we need to install Multipass
+    if (platform.system() == "Darwin") and not is_multipass_installed():
+        click.echo("Multipass is not installed")
+        multipass_installer = MultipassInstaller(gui_common)
+        if not multipass_installer.start():
+            click.echo("Installing Multipass failed")
+            return
+
     # See if we need to install Docker...
-    if (platform.system() == "Darwin" or platform.system() == "Windows") and (
+    if platform.system() == "Windows" and (
         not is_docker_installed() or not is_docker_ready(global_common)
     ):
         click.echo("Docker is either not installed or not running")
