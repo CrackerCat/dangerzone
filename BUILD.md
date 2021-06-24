@@ -54,12 +54,6 @@ If you don't have it already, install poetry (`pip3 install --user poetry`). The
 poetry install
 ```
 
-[Install go](https://golang.org/) and then compile podman:
-
-```
-./scripts/build-podman-mac.sh
-```
-
 Run from source tree:
 
 ```

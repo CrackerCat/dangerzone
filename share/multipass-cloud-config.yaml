@@ -1,9 +1,4 @@
 ---
-users:
-  - name: ubuntu
-    ssh-authorized-keys:
-      - PUT_SSH_PUBKEY_HERE
-
 # Latest podman packages for ubuntu, described in
 # https://podman.io/getting-started/installation.html#linux-distributions
 apt_sources:
@@ -35,8 +30,3 @@ package_update: true
 packages:
   - podman
   - containerd
-
-runcmd:
-  - systemctl --user enable --now podman.socket
-  - sudo loginctl enable-linger ubuntu
-  - sudo systemctl enable -s HUP ssh

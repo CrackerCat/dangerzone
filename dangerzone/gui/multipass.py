@@ -153,6 +153,10 @@ class DangerzoneVM(QtWidgets.QDialog):
         self.setMinimumWidth(300)
         self.setMinimumHeight(100)
 
+        self.description_label = QtWidgets.QLabel()
+        self.description_label.setAlignment(QtCore.Qt.AlignLeft)
+        self.description_label.setWordWrap(True)
+
         self.output_label = QtWidgets.QLabel()
         self.output_label.setAlignment(QtCore.Qt.AlignLeft)
         self.output_label.setWordWrap(True)
@@ -171,6 +175,7 @@ class DangerzoneVM(QtWidgets.QDialog):
         buttons_layout.addWidget(self.cancel_button)
 
         layout = QtWidgets.QVBoxLayout()
+        layout.addWidget(self.description_label)
         layout.addWidget(self.output_label)
         layout.addWidget(self.progress)
         layout.addLayout(buttons_layout)
@@ -191,8 +196,13 @@ class DangerzoneVM(QtWidgets.QDialog):
         self.output_label.hide()
         self.cancel_button.show()
 
-    def update_progress(self, label, output):
-        self.setWindowTitle(label)
+    def update_progress(self, title, description, output):
+        self.setWindowTitle(title)
+        if description == "":
+            self.description_label.hide()
+        else:
+            self.description_label.set_label(description)
+            self.description_label.show()
         self.output_label.setText(output)
 
     def start(self):
@@ -253,20 +263,21 @@ class Installer(QtCore.QThread):
 class VmBooter(QtCore.QThread):
     vm_finished = QtCore.Signal()
     vm_failed = QtCore.Signal(str)
-    update_progress = QtCore.Signal(str, str)
+    update_progress = QtCore.Signal(str, str, str)
 
     def __init__(self, global_common):
         super(VmBooter, self).__init__()
         self.global_common = global_common
         self.task_title = ""
+        self.task_description = ""
 
-        self.tmp_dir = tempfile.TemporaryDirectory(
-            prefix=os.path.join(appdirs.user_cache_dir("dangerzone"), "vm-booter-")
-        )
-        self.multipass_resource_path = self.global_common.get_resource_path("multipass")
+    def set_task(self, title, description=""):
+        self.task_title = title
+        self.task_description = description
+        self.update()
 
     def update(self, output=""):
-        self.update_progress.emit(self.task_title, output)
+        self.update_progress.emit(self.task_title, self.task_description, output)
 
     def exec_multipass_interactive(self, args):
         p = subprocess.Popen(
@@ -303,48 +314,11 @@ class VmBooter(QtCore.QThread):
 
     def run(self):
         # Open Multipass
-        self.task_title = "Opening Multipass"
-        self.update()
+        self.set_task("Opening Multipass")
         subprocess.run(["/usr/bin/open", "-a", "Multipass.app"])
 
-        # Make sure SSH key is there
-        self.task_title = "Checking on encryption keys"
-        self.update()
-        ssh_seckey_filename = os.path.join(
-            self.global_common.appdata_path, "id_ed25519"
-        )
-        ssh_pubkey_filename = os.path.join(
-            self.global_common.appdata_path, "id_ed25519.pub"
-        )
-        if not (
-            os.path.exists(ssh_seckey_filename) and os.path.exists(ssh_pubkey_filename)
-        ):
-            self.update("Generating SSH keys")
-            subprocess.run(
-                [
-                    "/usr/bin/ssh-keygen",
-                    "-t",
-                    "ed25519",
-                    "-N",
-                    "",
-                    "-C",
-                    "dangerzone",
-                    "-f",
-                    ssh_seckey_filename,
-                ]
-            )
-            if not (
-                os.path.exists(ssh_seckey_filename)
-                and os.path.exists(ssh_pubkey_filename)
-            ):
-                self.vm_failed.emit(f"Generating SSH key {ssh_seckey_filename} failed")
-                return
-
-        with open(ssh_pubkey_filename) as f:
-            ssh_pubkey = f.read()
-
         # Make sure dangerzone VM exists
-        self.task_title = "Setting up virtual machine"
+        self.set_task("Setting up virtual machine")
         self.update("Initializing Dangerzone VM")
         multipass_list = self.exec_multipass_list()
         if not multipass_list:
@@ -357,17 +331,15 @@ class VmBooter(QtCore.QThread):
                 break
 
         if not exists:
-            with open(
-                os.path.join(self.multipass_resource_path, "cloud-config.yaml")
-            ) as f:
-                cloud_config_yaml = f.read().replace("PUT_SSH_PUBKEY_HERE", ssh_pubkey)
-
-            cloud_config_filename = os.path.join(self.tmp_dir.name, "cloud-config.yaml")
-            with open(cloud_config_filename, "w") as f:
-                f.write(cloud_config_yaml)
+            cloud_config_filename = self.global_common.get_resource_path(
+                "multipass-cloud-config.yaml"
+            )
 
             # Create new VM
-            self.task_title = "Creating Dangerzone VM"
+            self.set_task(
+                "Creating Dangerzone VM",
+                "Hang tight. This will take several minutes but you only have to do this the first time you run Dangerzone.",
+            )
             self.update()
             self.exec_multipass_interactive(
                 [
@@ -386,13 +358,13 @@ class VmBooter(QtCore.QThread):
                 ]
             )
 
-            self.task_title = "Refreshing VMs list"
+            self.set_task("Refreshing VMs list")
             multipass_list = self.exec_multipass_list()
             if not multipass_list:
                 return
 
         # Make sure VM is started
-        self.task_title = "Starting Dangerzone VM"
+        self.set_task("Starting Dangerzone VM")
         self.update()
 
         vm = None
@@ -404,9 +376,36 @@ class VmBooter(QtCore.QThread):
         if vm["state"] != "Running":
             self.exec_multipass_interactive(["start", "dangerzone"])
 
-        # TODO: Finish
-        # - configure podman remote connection
-        # - test it
-        # - consider just using `multipass exec dangerzone -- podman` instead of ssh?
+        # Make sure the latest container is pulled
+        self.set_task(
+            "Updating Dangerzone container",
+            "It's important to always use the most up-to-date software.",
+        )
+        p = subprocess.Popen(
+            [
+                "/usr/local/bin/multipass",
+                "exec",
+                "dangerzone",
+                "--",
+                "podman",
+                "pull",
+                "docker.io/flmcode/dangerzone",
+            ],
+            startupinfo=self.global_common.get_subprocess_startupinfo(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        line = b""
+        while p.poll() is None:
+            chunk = p.stdout.read(1)
+            if chunk == b"\x08":
+                line = line[0:-1]
+            elif chunk == b"\r":
+                line = b""
+            else:
+                line += chunk
 
+            self.update(line.decode())
+
+        # All done
         self.vm_finished.emit()
