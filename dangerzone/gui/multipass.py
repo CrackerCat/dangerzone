@@ -5,6 +5,7 @@ import subprocess
 import platform
 import tempfile
 import appdirs
+import json
 from PySide2 import QtCore, QtGui, QtWidgets
 
 
@@ -39,7 +40,6 @@ class MultipassInstaller(QtWidgets.QDialog):
         self.task_label = QtWidgets.QLabel()
         self.task_label.setAlignment(QtCore.Qt.AlignCenter)
         self.task_label.setWordWrap(True)
-        self.task_label.setOpenExternalLinks(True)
 
         self.progress = QtWidgets.QProgressBar()
         self.progress.setMinimum(0)
@@ -143,6 +143,67 @@ class MultipassInstaller(QtWidgets.QDialog):
         return self.exec_() == QtWidgets.QDialog.Accepted
 
 
+class DangerzoneVM(QtWidgets.QDialog):
+    def __init__(self, gui_common, global_common):
+        super(DangerzoneVM, self).__init__()
+        self.global_common = global_common
+
+        self.setWindowTitle("Booting Dangerzone VM")
+        self.setWindowIcon(gui_common.get_window_icon())
+        self.setMinimumWidth(300)
+        self.setMinimumHeight(100)
+
+        self.output_label = QtWidgets.QLabel()
+        self.output_label.setAlignment(QtCore.Qt.AlignLeft)
+        self.output_label.setWordWrap(True)
+
+        self.progress = QtWidgets.QProgressBar()
+        self.progress.setValue(0)
+        self.progress.setMinimum(0)
+        self.progress.setMaximum(0)
+
+        self.cancel_button = QtWidgets.QPushButton("Sorry")
+        self.cancel_button.clicked.connect(self.cancel_clicked)
+        self.cancel_button.hide()
+
+        buttons_layout = QtWidgets.QHBoxLayout()
+        buttons_layout.addStretch()
+        buttons_layout.addWidget(self.cancel_button)
+
+        layout = QtWidgets.QVBoxLayout()
+        layout.addWidget(self.output_label)
+        layout.addWidget(self.progress)
+        layout.addLayout(buttons_layout)
+        layout.addStretch()
+        self.setLayout(layout)
+
+        # Threads
+        self.vm_booter_t = None
+
+    def cancel_clicked(self):
+        self.reject()
+
+    def vm_finished(self):
+        self.accept()
+
+    def vm_failed(self):
+        self.setWindowTitle("Booting VM failed")
+        self.output_label.hide()
+        self.cancel_button.show()
+
+    def update_progress(self, label, output):
+        self.setWindowTitle(label)
+        self.output_label.setText(output)
+
+    def start(self):
+        self.vm_booter_t = VmBooter(self.global_common)
+        self.vm_booter_t.vm_finished.connect(self.vm_finished)
+        self.vm_booter_t.vm_failed.connect(self.vm_failed)
+        self.vm_booter_t.update_progress.connect(self.update_progress)
+        self.vm_booter_t.start()
+        return self.exec_() == QtWidgets.QDialog.Accepted
+
+
 class Downloader(QtCore.QThread):
     download_finished = QtCore.Signal()
     download_failed = QtCore.Signal(int)
@@ -185,5 +246,167 @@ class Installer(QtCore.QThread):
 
     def run(self):
         print(f"Installing multipass")
-        subprocess.run(["open", "-W", self.installer_filename])
+        subprocess.run(["/usr/bin/open", "-W", self.installer_filename])
         self.install_finished.emit()
+
+
+class VmBooter(QtCore.QThread):
+    vm_finished = QtCore.Signal()
+    vm_failed = QtCore.Signal(str)
+    update_progress = QtCore.Signal(str, str)
+
+    def __init__(self, global_common):
+        super(VmBooter, self).__init__()
+        self.global_common = global_common
+        self.task_title = ""
+
+        self.tmp_dir = tempfile.TemporaryDirectory(
+            prefix=os.path.join(appdirs.user_cache_dir("dangerzone"), "vm-booter-")
+        )
+        self.multipass_resource_path = self.global_common.get_resource_path("multipass")
+
+    def update(self, output=""):
+        self.update_progress.emit(self.task_title, output)
+
+    def exec_multipass_interactive(self, args):
+        p = subprocess.Popen(
+            ["/usr/local/bin/multipass"] + args,
+            startupinfo=self.global_common.get_subprocess_startupinfo(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        line = b""
+        while p.poll() is None:
+            chunk = p.stdout.read(1)
+            if chunk == b"\x08":
+                line = line[0:-1]
+            elif chunk == b"\r":
+                line = b""
+            else:
+                line += chunk
+
+            self.update(line.decode())
+
+    def exec_multipass_list(self):
+        cmd = ["/usr/local/bin/multipass", "list", "--format", "json"]
+        stdout = subprocess.check_output(cmd)
+        try:
+            multipass_list = json.loads(stdout)
+            if "list" not in multipass_list:
+                self.vm_failed.emit(f"Missing key 'list': {multipass_list}")
+                return None
+        except:
+            self.vm_failed.emit(f"Invalid JSON: {stdout}")
+            return None
+
+        return multipass_list
+
+    def run(self):
+        # Open Multipass
+        self.task_title = "Opening Multipass"
+        self.update()
+        subprocess.run(["/usr/bin/open", "-a", "Multipass.app"])
+
+        # Make sure SSH key is there
+        self.task_title = "Checking on encryption keys"
+        self.update()
+        ssh_seckey_filename = os.path.join(
+            self.global_common.appdata_path, "id_ed25519"
+        )
+        ssh_pubkey_filename = os.path.join(
+            self.global_common.appdata_path, "id_ed25519.pub"
+        )
+        if not (
+            os.path.exists(ssh_seckey_filename) and os.path.exists(ssh_pubkey_filename)
+        ):
+            self.update("Generating SSH keys")
+            subprocess.run(
+                [
+                    "/usr/bin/ssh-keygen",
+                    "-t",
+                    "ed25519",
+                    "-N",
+                    "",
+                    "-C",
+                    "dangerzone",
+                    "-f",
+                    ssh_seckey_filename,
+                ]
+            )
+            if not (
+                os.path.exists(ssh_seckey_filename)
+                and os.path.exists(ssh_pubkey_filename)
+            ):
+                self.vm_failed.emit(f"Generating SSH key {ssh_seckey_filename} failed")
+                return
+
+        with open(ssh_pubkey_filename) as f:
+            ssh_pubkey = f.read()
+
+        # Make sure dangerzone VM exists
+        self.task_title = "Setting up virtual machine"
+        self.update("Initializing Dangerzone VM")
+        multipass_list = self.exec_multipass_list()
+        if not multipass_list:
+            return
+
+        exists = False
+        for multipass_vm in multipass_list["list"]:
+            if multipass_vm["name"] == "dangerzone":
+                exists = True
+                break
+
+        if not exists:
+            with open(
+                os.path.join(self.multipass_resource_path, "cloud-config.yaml")
+            ) as f:
+                cloud_config_yaml = f.read().replace("PUT_SSH_PUBKEY_HERE", ssh_pubkey)
+
+            cloud_config_filename = os.path.join(self.tmp_dir.name, "cloud-config.yaml")
+            with open(cloud_config_filename, "w") as f:
+                f.write(cloud_config_yaml)
+
+            # Create new VM
+            self.task_title = "Creating Dangerzone VM"
+            self.update()
+            self.exec_multipass_interactive(
+                [
+                    "launch",
+                    "-c",
+                    "2",
+                    "-m",
+                    "2G",
+                    "-d",
+                    "10G",
+                    "-n",
+                    "dangerzone",
+                    "20.10",
+                    "--cloud-init",
+                    cloud_config_filename,
+                ]
+            )
+
+            self.task_title = "Refreshing VMs list"
+            multipass_list = self.exec_multipass_list()
+            if not multipass_list:
+                return
+
+        # Make sure VM is started
+        self.task_title = "Starting Dangerzone VM"
+        self.update()
+
+        vm = None
+        for multipass_vm in multipass_list["list"]:
+            if multipass_vm["name"] == "dangerzone":
+                vm = multipass_vm
+                break
+
+        if vm["state"] != "Running":
+            self.exec_multipass_interactive(["start", "dangerzone"])
+
+        # TODO: Finish
+        # - configure podman remote connection
+        # - test it
+        # - consider just using `multipass exec dangerzone -- podman` instead of ssh?
+
+        self.vm_finished.emit()

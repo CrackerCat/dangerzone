@@ -15,7 +15,7 @@ from .docker_installer import (
     DockerInstaller,
     AuthorizationFailed,
 )
-from .multipass import is_multipass_installed, MultipassInstaller
+from .multipass import is_multipass_installed, MultipassInstaller, DangerzoneVM
 from ..global_common import GlobalCommon
 
 
@@ -100,6 +100,12 @@ def gui_main(custom_container, filename):
         if not multipass_installer.start():
             click.echo("Installing Multipass failed")
             return
+
+    # Boot the multipass VM
+    dangerzone_vm = DangerzoneVM(gui_common, global_common)
+    if not dangerzone_vm.start():
+        click.echo("Failed booting VM")
+        return
 
     # See if we need to install Docker...
     if platform.system() == "Windows" and (
